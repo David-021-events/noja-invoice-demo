@@ -10,15 +10,29 @@ The upstream architecture spec lives in a separate repo: `David-021-events/NOJA`
 
 ## Status
 
-Under construction. Engine core (`engine/`) is complete and proven:
+Complete (SRD steps 0–7). Run the whole demonstration end to end:
 
 ```bash
-python -m engine._smoke
+python -m runs.swap_demo        # run both pipelines, swap the model, lapse + re-sign
+python verify.py                # replay every outcome to its signed artifacts (JSON only)
+python -m runs.build_manifest   # collect the trail into viewer/trail_manifest.json
+python -m http.server 8000      # then open http://localhost:8000/viewer/
 ```
 
-This exercises the node abstraction, signed-Git-tag signing, the canonical JSON trail,
-engine-detected signature lapse with pre-signed fallback, and the fail-loud-if-no-key rule —
-all against a trivial fake domain (no LLM, no invoices).
+`runs/swap_demo.py` shows the punchline: after the model swaps, the eval stays green on both
+pipelines, the black-box keeps paying in the green-but-unsigned window, while NOJA lapses the
+composite signature, halts money movement in safe-mode, and resumes only after the AI Controls
+Lead re-signs for the new model.
+
+Individual pieces, each runnable on its own:
+
+```bash
+python -m engine._smoke   # engine core (node, signing, trail, lapse, fallback, fail-loud) — fake domain
+python -m domain._smoke   # the invoice agent reads a fixture, checks the PO, decides; cache replays
+python -m runs.noja       # the four-node signed network over the fixture invoices
+python -m runs.blackbox   # the thin, unsigned single-loop counterpart
+python -m evals.suite     # the fixed eval suite (green on the pinned model)
+```
 
 ## Signing setup (required — the signatures are the point)
 

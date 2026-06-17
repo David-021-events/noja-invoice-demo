@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NOJA — Invoice Approval Trail Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,400;1,9..144,500&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* Brand: the warm "paper" palette from the author's /diagrams (NOT a dark theme). */
+  :root {
+    --paper:#f4ede1; --paper-2:#e8dfce; --ink:#1c1814; --ink-soft:#4a3f33;
+    --ink-faint:#8a7d6c; --accent:#a8421f; --rule:#c9bca7;
+    --green:#3f6f3a; --green-bg:rgba(63,111,58,0.10);
+    --harm:#a8421f; --harm-bg:rgba(168,66,31,0.07);
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    font-family:'IBM Plex Sans',sans-serif; background:var(--paper); color:var(--ink);
+    padding:3rem 2rem 5rem; line-height:1.5;
+    background-image:
+      radial-gradient(circle at 18% 22%, rgba(28,24,20,0.025) 1px, transparent 1.5px),
+      radial-gradient(circle at 72% 78%, rgba(28,24,20,0.02) 1px, transparent 1.5px);
+    background-size:4px 4px,7px 7px;
+  }
+  main { max-width:1180px; margin:0 auto; }
+
+  .meta {
+    display:flex; justify-content:space-between; align-items:center;
+    font-family:'IBM Plex Mono',monospace; font-size:0.68rem; letter-spacing:0.2em;
+    text-transform:uppercase; color:var(--ink-faint);
+    border-top:1px solid var(--rule); border-bottom:1px solid var(--rule);
+    padding:0.6rem 0; margin-bottom:2rem;
+  }
+  .meta .accent { color:var(--accent); font-weight:500; }
+
+  h1 {
+    font-family:'Fraunces',serif; font-weight:600; font-size:clamp(2rem,4.5vw,3.4rem);
+    line-height:1.0; letter-spacing:-0.025em; font-variation-settings:"SOFT" 100; margin-bottom:0.5rem;
+  }
+  h1 em { font-style:italic; font-weight:400; color:var(--accent); }
+  .subtitle { font-family:'Fraunces',serif; font-style:italic; font-size:1.15rem; color:var(--ink-soft); margin-bottom:2rem; max-width:60ch; }
+
+  /* headline harm strip */
+  .headline { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; margin-bottom:2.5rem; }
+  .stat { border:1px solid var(--rule); padding:1.1rem 1.3rem; background:#faf5ec; }
+  .stat.harm { border-color:var(--harm); background:var(--harm-bg); }
+  .stat .n { font-family:'Fraunces',serif; font-size:2.4rem; font-weight:600; line-height:1; }
+  .stat.harm .n { color:var(--harm); }
+  .stat .lbl { font-family:'IBM Plex Mono',monospace; font-size:0.66rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--ink-faint); margin-top:0.5rem; }
+
+  .phase { margin-bottom:2.4rem; }
+  .phase-title {
+    font-family:'IBM Plex Mono',monospace; font-size:0.72rem; letter-spacing:0.18em;
+    text-transform:uppercase; color:var(--accent); padding-bottom:0.5rem; margin-bottom:1rem;
+    border-bottom:1px solid var(--rule);
+  }
+  .phase.window { background:var(--harm-bg); border:1px solid rgba(168,66,31,0.25); padding:1.2rem; }
+  .phase.window .phase-title { color:var(--harm); }
+
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
+  .col h2 {
+    font-family:'IBM Plex Mono',monospace; font-size:0.7rem; letter-spacing:0.16em;
+    text-transform:uppercase; margin-bottom:0.7rem; color:var(--ink-soft);
+    display:flex; align-items:center; gap:0.5rem;
+  }
+  .col h2 .dot { width:8px; height:8px; border-radius:50%; }
+  .col.noja h2 .dot { background:var(--accent); }
+  .col.blackbox h2 .dot { background:var(--ink-faint); }
+
+  .badge {
+    display:inline-flex; align-items:center; gap:0.4rem; font-family:'IBM Plex Mono',monospace;
+    font-size:0.66rem; letter-spacing:0.08em; padding:0.25rem 0.55rem; border-radius:2px; margin-bottom:0.6rem;
+  }
+  .badge.green { background:var(--green-bg); color:var(--green); border:1px solid var(--green); }
+  .badge.red { background:var(--harm-bg); color:var(--harm); border:1px solid var(--harm); }
+
+  .card { border:1px solid var(--rule); background:#faf5ec; padding:0.55rem 0.7rem; margin-bottom:0.5rem; font-size:0.85rem; }
+  .card.pay { border-left:3px solid var(--green); }
+  .card.pay.unsigned { border-left:3px solid var(--harm); background:var(--harm-bg); }
+  .card.lapse { border-left:3px solid var(--harm); background:var(--harm-bg); }
+  .card.sign { border-left:3px solid var(--green); background:var(--green-bg); }
+  .card .row1 { display:flex; justify-content:space-between; gap:0.5rem; align-items:baseline; }
+  .card .inv { font-family:'IBM Plex Mono',monospace; font-weight:500; }
+  .card .dec { font-family:'IBM Plex Mono',monospace; font-size:0.72rem; letter-spacing:0.06em; }
+  .dec.PAY { color:var(--green); } .dec.HOLD { color:var(--ink-soft); } .dec.ESCALATE { color:var(--accent); }
+  .card .meta-line { font-family:'IBM Plex Mono',monospace; font-size:0.62rem; color:var(--ink-faint); margin-top:0.25rem; word-break:break-all; }
+  .card .meta-line.unsigned { color:var(--harm); }
+  .card .title { font-family:'Fraunces',serif; font-weight:600; font-size:0.95rem; }
+  .card .note { font-size:0.78rem; color:var(--ink-soft); margin-top:0.2rem; }
+
+  .caption { margin-top:3rem; border-top:1px solid var(--rule); padding-top:1.5rem; }
+  .caption p { font-family:'Fraunces',serif; font-size:1.05rem; line-height:1.6; max-width:75ch; }
+  .caption em { font-style:italic; color:var(--accent); }
+  .foot { margin-top:1.5rem; font-family:'IBM Plex Mono',monospace; font-size:0.62rem; color:var(--ink-faint); letter-spacing:0.05em; }
+  #error { color:var(--harm); font-family:'IBM Plex Mono',monospace; font-size:0.85rem; }
+</style>
+</head>
+<body>
+<main>
+  <div class="meta">
+    <span class="accent">NOJA · v0.6</span>
+    <span>Invoice Approval — Trail Viewer</span>
+    <span id="generated">—</span>
+  </div>
+
+  <h1>The <em>green-but-unsigned</em> window</h1>
+  <p class="subtitle">The same invoices run through two pipelines. The eval told both systems the new
+  model still worked — only NOJA required someone to <em>authorize</em> it before acting.</p>
+
+  <div class="headline" id="headline"></div>
+  <div id="phases"></div>
+  <div id="error"></div>
+
+  <div class="caption">
+    <p>After the model swap the eval stays <em>green on both sides</em> — and that green is real
+    evidence, not a trick. The black-box agent treats green as sufficient and keeps paying. NOJA
+    also sees green, but its signed behavior envelope was scoped to the <em>prior</em> model, so the
+    signature lapses, money movement halts, and execution resumes only after a named human
+    re-authorizes the new model against that same green eval. <em>Evidence is not authorization;</em>
+    the harm is the interval where the new model was green but unauthorized — and only the black-box
+    paid during it.</p>
+    <p class="foot">This page renders <code>trail_manifest.json</code> only — it holds no decision,
+    verification, or reconstruction logic. To verify signatures, clone the repo and run
+    <code>python verify.py</code> (and <code>git verify-tag</code>); a page cannot verify a
+    signature.</p>
+  </div>
+</main>
+
+<script>
+const $ = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h !== undefined) e.innerHTML = h; return e; };
+const shortTag = ref => ref ? ref.tag.replace(/^artifact\//,'').replace(/^transition\//,'') : '';
+const isPayment = r => r.output && r.output.action === 'payment_authorized';
+const isEval = r => r.output && r.output.event === 'eval_result';
+const decisionOf = r => r.output && r.output.execution && r.output.execution.decision;
+
+fetch('trail_manifest.json').then(r => {
+  if (!r.ok) throw new Error('manifest not found (run: python -m runs.build_manifest, then serve with python -m http.server)');
+  return r.json();
+}).then(render).catch(e => { document.getElementById('error').textContent = 'Could not load trail: ' + e.message; });
+
+function render(m) {
+  document.getElementById('generated').textContent = (m.generated_at || '').slice(0,16).replace('T',' ') + ' UTC';
+  const recs = m.records || [];
+  const windowPhase = m.phases.find(p => /unsigned/i.test(p));
+
+  // Headline: payments in the unsigned window (pure presentation aggregation — no logic).
+  const windowPays = pipe => recs.filter(r => r.phase === windowPhase && r.pipeline === pipe && isPayment(r)).length;
+  const head = document.getElementById('headline');
+  const bb = $('div','stat harm'); bb.append($('div','n', windowPays('blackbox')), $('div','lbl','black-box payments in the unsigned window — money moved while unauthorized'));
+  const nj = $('div','stat'); nj.append($('div','n', windowPays('noja')), $('div','lbl','NOJA payments in the unsigned window — halted, awaiting a human'));
+  head.append(bb, nj);
+
+  // Phases left-to-right; within each, NOJA and black-box side by side.
+  const phasesEl = document.getElementById('phases');
+  for (const phase of m.phases) {
+    const sec = $('div', 'phase' + (phase === windowPhase ? ' window' : ''));
+    sec.append($('div','phase-title', phase));
+    const cols = $('div','cols');
+    cols.append(column('noja','NOJA — signed network', recs, phase),
+                column('blackbox','Black-box — single agent', recs, phase));
+    sec.append(cols);
+    phasesEl.append(sec);
+  }
+}
+
+function column(pipe, label, recs, phase) {
+  const col = $('div', 'col ' + pipe);
+  const h = $('h2'); h.append($('span','dot'), document.createTextNode(label)); col.append(h);
+  const rows = recs.filter(r => r.pipeline === pipe && r.phase === phase);
+
+  // eval badge
+  const ev = rows.find(isEval);
+  if (ev) {
+    const b = $('span', 'badge ' + (ev.output.green ? 'green' : 'red'),
+      (ev.output.green ? '● GREEN' : '● RED') + ` &nbsp;eval ${ev.output.passed}/${ev.output.total} · ${ev.output.model_id}`);
+    col.append(b); col.append($('div','',''));
+  }
+
+  for (const r of rows) {
+    if (isEval(r)) continue;
+    if (isPayment(r)) {
+      const signed = pipe === 'noja';
+      const c = $('div', 'card pay' + (signed ? '' : ' unsigned'));
+      c.append($('div','row1', `<span class="inv">${r.invoice_id}</span><span class="dec PAY">payment_authorized $${r.output.amount.toLocaleString()}</span>`));
+      c.append($('div','meta-line' + (signed ? '' : ' unsigned'),
+        signed ? `signed · ${r.accountable_role} · ${shortTag(r.signed_artifact_ref)}` : 'no signature · no accountable role'));
+      col.append(c); continue;
+    }
+    if (r.function === 'transition') {
+      const c = $('div','card lapse');
+      c.append($('div','title', `⚠ signature lapsed: ${r.output.from_state} → ${r.output.to_state}`));
+      c.append($('div','note', `trigger: ${r.output.trigger} · attestor: ${r.output.transition_attestor} · fallback: ${r.output.fallback_selected}`));
+      c.append($('div','meta-line', shortTag(r.signed_artifact_ref)));
+      col.append(c); continue;
+    }
+    if (r.function === 'accountability' && r.output.event === 'signature_activated') {
+      const c = $('div','card sign');
+      c.append($('div','title', `✓ signed → Active`));
+      c.append($('div','note', `${r.accountable_role}`));
+      c.append($('div','meta-line', shortTag(r.signed_artifact_ref)));
+      col.append(c); continue;
+    }
+    if (pipe === 'noja' && r.node === 'escalation') {
+      const c = $('div','card');
+      c.append($('div','row1', `<span class="inv">${r.invoice_id}</span><span class="dec ESCALATE">HITL: ${r.output.resolution}</span>`));
+      c.append($('div','meta-line', `signed · ${r.accountable_role} · ${shortTag(r.signed_artifact_ref)}`));
+      col.append(c); continue;
+    }
+    // final decision rows: NOJA node 3, or black-box loop
+    const dec = pipe === 'noja' ? decisionOf(r) : (r.output && r.output.decision);
+    const showNode = pipe === 'noja' ? r.node === 'agent_execution' : r.node === 'blackbox-loop';
+    if (dec && showNode && !isPayment(r)) {
+      const c = $('div','card');
+      c.append($('div','row1', `<span class="inv">${r.invoice_id}</span><span class="dec ${dec}">${dec}</span>`));
+      c.append($('div','meta-line' + (pipe === 'noja' ? '' : ' unsigned'),
+        pipe === 'noja'
+          ? `${r.accountable_role} · ${r.signature_state} · ${shortTag(r.signed_artifact_ref)}`
+          : 'unsigned · no role · no scope'));
+      col.append(c);
+    }
+  }
+  if (col.querySelectorAll('.card,.badge').length === 0) col.append($('div','meta-line','(no events)'));
+  return col;
+}
+</script>
+</body>
+</html>
