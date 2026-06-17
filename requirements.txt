@@ -1,0 +1,10 @@
+# Pinned exact versions. Treat dependency drift as part of the node-3 execution envelope
+# (SRD §5.1): this file is NAMED as an environmental scope condition of the node-3 composite
+# signature. An unpinned framework would be an unsigned moving part — a live counterexample
+# to the demo's own thesis. No drift-checking machinery is built; the pin + the scope
+# declaration is the whole mechanism.
+#
+# Resolved at build time on Python 3.12.
+pydantic-ai==1.107.0
+pydantic==2.13.4
+anthropic==0.109.2

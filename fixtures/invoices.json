@@ -1,0 +1,91 @@
+[
+  {
+    "invoice_id": "INV-001",
+    "vendor": "Acme Components Ltd",
+    "po_number": "PO-1001",
+    "line_items": [
+      { "description": "M8 bolts, box of 500", "qty": 4, "unit_price": 220.00 }
+    ],
+    "total_amount": 880.00,
+    "_case": "clean match, active PO, below threshold",
+    "_expected": "PAY"
+  },
+  {
+    "invoice_id": "INV-002",
+    "vendor": "Borealis Metals Inc",
+    "po_number": "PO-1002",
+    "line_items": [
+      { "description": "Aluminium sheet, 2mm", "qty": 12, "unit_price": 400.00 }
+    ],
+    "total_amount": 4800.00,
+    "_case": "near match within 5% tolerance ($4,800 vs $5,000 PO)",
+    "_expected": "PAY"
+  },
+  {
+    "invoice_id": "INV-003",
+    "vendor": "Cygnus Fasteners",
+    "po_number": "PO-1003",
+    "line_items": [
+      { "description": "Stainless rivets, bulk", "qty": 20, "unit_price": 320.00 }
+    ],
+    "total_amount": 6400.00,
+    "_case": "amount exceeds tolerance ($6,400 vs $5,000 PO)",
+    "_expected": "HOLD"
+  },
+  {
+    "invoice_id": "INV-004",
+    "vendor": "Delta Office Supplies",
+    "po_number": null,
+    "line_items": [
+      { "description": "Printer toner, assorted", "qty": 8, "unit_price": 150.00 }
+    ],
+    "total_amount": 1200.00,
+    "_case": "no PO referenced",
+    "_expected": "HOLD"
+  },
+  {
+    "invoice_id": "INV-005",
+    "vendor": "Acme Components Ltd",
+    "po_number": "PO-1001",
+    "line_items": [
+      { "description": "M8 bolts, box of 500", "qty": 4, "unit_price": 220.00 }
+    ],
+    "total_amount": 880.00,
+    "_case": "duplicate invoice id/vendor/amount of INV-001",
+    "_expected": "HOLD"
+  },
+  {
+    "invoice_id": "INV-006",
+    "vendor": "Everest Logistics",
+    "po_number": "PO-1006",
+    "line_items": [
+      { "description": "Freight, Q1 consolidated", "qty": 1, "unit_price": 2400.00 }
+    ],
+    "total_amount": 2400.00,
+    "_case": "references a closed PO",
+    "_expected": "HOLD"
+  },
+  {
+    "invoice_id": "INV-007",
+    "vendor": "Fortis Industrial",
+    "po_number": "PO-1007",
+    "line_items": [
+      { "description": "CNC machining cell, install", "qty": 1, "unit_price": 48000.00 }
+    ],
+    "total_amount": 48000.00,
+    "_case": "high-value clean match above escalation threshold",
+    "_expected": "ESCALATE"
+  },
+  {
+    "invoice_id": "INV-008",
+    "vendor": "Greystone Consulting",
+    "po_number": "PO-1008",
+    "line_items": [
+      { "description": "Advisory services", "qty": 1, "unit_price": 900.00 },
+      { "description": "Miscellaneous adjustment", "qty": 1, "unit_price": 7600.00 }
+    ],
+    "total_amount": 8500.00,
+    "_case": "anomalous line-item pattern (large unexplained 'miscellaneous' line)",
+    "_expected": "ESCALATE"
+  }
+]

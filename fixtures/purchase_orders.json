@@ -1,0 +1,8 @@
+[
+  { "po_number": "PO-1001", "vendor": "Acme Components Ltd", "authorized_amount": 900.00, "status": "active" },
+  { "po_number": "PO-1002", "vendor": "Borealis Metals Inc", "authorized_amount": 5000.00, "status": "active" },
+  { "po_number": "PO-1003", "vendor": "Cygnus Fasteners", "authorized_amount": 5000.00, "status": "active" },
+  { "po_number": "PO-1006", "vendor": "Everest Logistics", "authorized_amount": 2400.00, "status": "closed" },
+  { "po_number": "PO-1007", "vendor": "Fortis Industrial", "authorized_amount": 48000.00, "status": "active" },
+  { "po_number": "PO-1008", "vendor": "Greystone Consulting", "authorized_amount": 9000.00, "status": "active" }
+]

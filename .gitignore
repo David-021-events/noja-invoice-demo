@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ── NOJA demo ──────────────────────────────────────────────
+.env
+.venv/
+# OUTPUT: regenerated canonical JSON trail per run
+trail/
+# GENERATED: working-copy manifest (the site/ copy is committed separately)
+viewer/trail_manifest.json
+# record/replay cache store (disposable)
+llm/_cache/
