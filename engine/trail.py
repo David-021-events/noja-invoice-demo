@@ -32,6 +32,11 @@ class Trail:
         self.dir = Path(trail_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self._seq = self._next_seq()
+        self.phase: str | None = None  # optional narrative phase tag (set by the swap demo)
+
+    def set_phase(self, phase: str | None) -> None:
+        """Tag subsequently-written records with a narrative phase (for the viewer's segmentation)."""
+        self.phase = phase
 
     def _next_seq(self) -> int:
         # Derive from the max existing seq prefix (not the count) so a gap or stray file can't
@@ -76,6 +81,8 @@ class Trail:
             "function": function,
             "output": output,
         }
+        if self.phase is not None:
+            record["phase"] = self.phase
         # NOJA records carry the accountability chain; black-box records deliberately do not.
         if accountable_role is not None:
             record["accountable_role"] = accountable_role

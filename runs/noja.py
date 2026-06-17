@@ -13,13 +13,16 @@ Then prove traceability with:  python verify.py
 
 from __future__ import annotations
 
+import json
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from domain import agent, anomaly, approval_policy, escalation, fixtures
 from engine import sign
 from engine.node import JudgmentNode
-from engine.signature import Fallback, Scope, Signature, State
+from engine.signature import Fallback, Scope, Signature, State, TransitionRecord
 from engine.trail import Trail
 from llm import client
 
@@ -131,6 +134,29 @@ def _write_payment(trail: Trail, invoice: dict, upstream_ref: str, sig: Signatur
         accountable_role="AI Controls Lead", signed_artifact_ref=sig.artifact_ref.to_dict(),
         scope=sig.scope.to_dict(), signature_state=sig.state.value, upstream_ref=upstream_ref,
     )
+
+
+def lapse_composite(trail: Trail, sig: Signature, observed_model_id: str) -> TransitionRecord | None:
+    """Engine-detected Active->Lapsed transition (§4.5). Returns the transition, or None if scope
+    still holds. The transition is drawn from the PRE-SIGNED scope+fallback and attested by the
+    engine/detector key — no human signs at lapse time. Records and signs the transition."""
+    observed = {"model_id": observed_model_id}
+    if not sig.detect_lapse(observed):
+        return None
+    ts = datetime.now(timezone.utc).isoformat()
+    transition = sig.lapse(observed, transition_id=str(uuid.uuid4()), timestamp=ts)
+    path = _write_artifact("transitions", transition.transition_id,
+                           json.dumps(transition.to_dict(), indent=2, sort_keys=True))
+    ref = sign.sign_transition(path, signature_id=sig.signature_id, to_state="Lapsed",
+                               timestamp=ts, message="engine-detected lapse: behavior-envelope "
+                               f"model {transition.previous_scope_condition} no longer obtains")
+    transition.transition_artifact_hash = ref.content_hash
+    trail.write(
+        pipeline="noja", invoice_id="(transition)", node="agent_composite", function="transition",
+        output=transition.to_dict(), signed_artifact_ref=ref.to_dict(),
+        signature_state=State.LAPSED.value,
+    )
+    return transition
 
 
 def _run_hitl(trail: Trail, invoice: dict, upstream_ref: str) -> str:

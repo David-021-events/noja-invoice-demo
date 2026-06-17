@@ -117,8 +117,11 @@ def main() -> int:
         return 1
 
     by_id = {r["event_id"]: r for r in records}
+    # Per-invoice reconstruction excludes non-invoice markers like "(onboarding)" / "(transition)";
+    # their signed tags are still checked by the Phase-1 binding pass over ALL records.
     noja = [r for r in records
-            if r.get("pipeline") == "noja" and r.get("invoice_id") not in (None, "(onboarding)")]
+            if r.get("pipeline") == "noja"
+            and r.get("invoice_id") and not str(r["invoice_id"]).startswith("(")]
 
     print("NOJA trail verification (reads JSON only)\n" + "=" * 64)
 
