@@ -86,9 +86,11 @@ def composite_artifact_bytes(policy: PolicyParams, system_prompt: str, model_id:
             ],
             "model_id": model_id,  # version-pinned execution identity (the lapse axis)
             "behavior_envelope": {
+                # Matches the eval suite's documented coverage categories (SRD §7.1) exactly — do
+                # not claim coverage the suite does not exercise.
                 "coverage": [
-                    "clean match", "near match", "over tolerance", "no PO", "duplicate",
-                    "closed PO", "high-value escalation", "anomaly",
+                    "clean match", "near match", "mismatch", "no PO", "duplicate",
+                    "high-value escalation",
                 ],
                 "lockfile": "requirements.txt",  # environmental scope condition (§4.3/§5.1)
                 "note": "eval suite green under this pinned model id",
@@ -119,20 +121,33 @@ def make_execution_fns(*, pos: list[dict], policy: PolicyParams, system_prompt: 
                 "model_id": prediction["assessed_under_model_id"]}
 
     def execute(_decision: dict, inp: dict) -> dict:
-        invoice = inp["invoice"]
-        signals = {"anomaly": inp.get("anomaly"), "policy_eval": inp.get("policy_eval")}
-        agent_decision, cached = decide(
-            invoice=invoice, pos=pos, policy=policy,
-            system_prompt=system_prompt, model=model, extra_signals=signals,
+        agent_decision, cached = execute_decision(
+            invoice=inp["invoice"], pos=pos, policy=policy, system_prompt=system_prompt,
+            model=model, anomaly=inp.get("anomaly"), policy_eval=inp.get("policy_eval"),
         )
         return {
-            "invoice": invoice,
+            "invoice": inp["invoice"],
             "decision": agent_decision.decision,
             "rationale": agent_decision.rationale,
             "cached": cached,
         }
 
     return predict, judge, execute
+
+
+def execute_decision(
+    *, invoice: dict, pos: list[dict], policy: PolicyParams, system_prompt: str, model: str,
+    anomaly: dict | None, policy_eval: dict | None,
+) -> tuple[AgentDecision, bool]:
+    """The single node-3 execution composition: assemble the upstream signals and run the agent.
+
+    Both the signed pipeline (make_execution_fns.execute) and the eval (domain.decision.classify_noja)
+    go through THIS function, so the model decision they produce for the same invoice cannot drift.
+    """
+    return decide(
+        invoice=invoice, pos=pos, policy=policy, system_prompt=system_prompt, model=model,
+        extra_signals={"anomaly": anomaly, "policy_eval": policy_eval},
+    )
 
 
 def safe_mode_execution(_prediction: dict, inp: dict) -> dict:
@@ -165,8 +180,17 @@ def blackbox_system_prompt(policy: PolicyParams) -> str:
     )
 
 
+def _public_invoice(invoice: dict) -> dict:
+    """Drop fixture-only metadata (keys starting with '_', e.g. _case/_expected) so the model is
+    NEVER shown the expected outcome. Sending _expected would leak the answer and invalidate both
+    the eval and the pipeline decisions."""
+    return {k: v for k, v in invoice.items() if not k.startswith("_")}
+
+
 def _build_agent(model: str, system_prompt: str, pos: list[dict]) -> Agent:
-    agent = Agent(model, output_type=AgentDecision, system_prompt=system_prompt)
+    # temperature=0 for the most reproducible decisions the provider allows (eval stability).
+    agent = Agent(model, output_type=AgentDecision, system_prompt=system_prompt,
+                  model_settings={"temperature": 0.0})
 
     @agent.tool_plain
     def lookup_po(po_number: str) -> dict:
@@ -199,14 +223,16 @@ def decide(
     """
     model_id = client.bare_id(model)
     signals = extra_signals or {}
+    public_invoice = _public_invoice(invoice)  # never expose _case/_expected to the model
 
-    # The cache key must capture everything that determines the answer.
+    # The cache key must capture everything that determines the answer (and nothing the model
+    # never sees — so it excludes fixture metadata too).
     cache_payload = json.dumps(
-        {"system": system_prompt, "invoice": invoice, "pos": pos, "signals": signals},
+        {"system": system_prompt, "invoice": public_invoice, "pos": pos, "signals": signals},
         sort_keys=True,
     )
 
-    user_message = "Decide this invoice:\n" + json.dumps(invoice, indent=2)
+    user_message = "Decide this invoice:\n" + json.dumps(public_invoice, indent=2)
     if signals:
         user_message += f"\n\n{signals_label}:\n" + json.dumps(signals, indent=2)
 

@@ -1,0 +1,9 @@
+[
+  { "id": "clean-match",     "category": "clean match",            "invoice_id": "INV-001", "expected": "PAY" },
+  { "id": "near-match",      "category": "near match",             "invoice_id": "INV-002", "expected": "PAY" },
+  { "id": "over-tolerance",  "category": "mismatch",               "invoice_id": "INV-003", "expected": "HOLD" },
+  { "id": "no-po",           "category": "no PO",                  "invoice_id": "INV-004", "expected": "HOLD" },
+  { "id": "duplicate",       "category": "duplicate",              "invoice_id": "INV-005", "expected": "HOLD",
+    "seen_invoice_ids": ["INV-001"] },
+  { "id": "high-value",      "category": "high-value escalation",  "invoice_id": "INV-007", "expected": "ESCALATE" }
+]
