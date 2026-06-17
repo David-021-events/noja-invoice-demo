@@ -143,10 +143,13 @@ fetch('trail_manifest.json').then(r => {
 function render(m) {
   document.getElementById('generated').textContent = (m.generated_at || '').slice(0,16).replace('T',' ') + ' UTC';
   const recs = m.records || [];
-  const windowPhase = m.phases.find(p => /unsigned/i.test(p));
+  // The harm window is identified by a structured phase_key on the records, never by matching the
+  // human phase prose (rewording a label must not silently break the headline).
+  const windowRec = recs.find(r => r.phase_key === 'harm-window');
+  const windowPhase = windowRec ? windowRec.phase : undefined;
 
   // Headline: payments in the unsigned window (pure presentation aggregation — no logic).
-  const windowPays = pipe => recs.filter(r => r.phase === windowPhase && r.pipeline === pipe && isPayment(r)).length;
+  const windowPays = pipe => recs.filter(r => r.phase_key === 'harm-window' && r.pipeline === pipe && isPayment(r)).length;
   const head = document.getElementById('headline');
   const bb = $('div','stat harm'); bb.append($('div','n', windowPays('blackbox')), $('div','lbl','black-box payments in the unsigned window — money moved while unauthorized'));
   const nj = $('div','stat'); nj.append($('div','n', windowPays('noja')), $('div','lbl','NOJA payments in the unsigned window — halted, awaiting a human'));
@@ -181,7 +184,9 @@ function column(pipe, label, recs, phase) {
   for (const r of rows) {
     if (isEval(r)) continue;
     if (isPayment(r)) {
-      const signed = pipe === 'noja';
+      // Signedness is read from the record itself, not assumed from the pipeline name: the page must
+      // never label a payment "signed" unless it actually carries a signed_artifact_ref.
+      const signed = !!r.signed_artifact_ref;
       const c = $('div', 'card pay' + (signed ? '' : ' unsigned'));
       c.append($('div','row1', `<span class="inv">${r.invoice_id}</span><span class="dec PAY">payment_authorized $${r.output.amount.toLocaleString()}</span>`));
       c.append($('div','meta-line' + (signed ? '' : ' unsigned'),

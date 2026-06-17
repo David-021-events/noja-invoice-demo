@@ -32,11 +32,15 @@ class Trail:
         self.dir = Path(trail_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self._seq = self._next_seq()
-        self.phase: str | None = None  # optional narrative phase tag (set by the swap demo)
+        self.phase: str | None = None       # human narrative phase label (for display)
+        self.phase_key: str | None = None   # stable machine key (consumers join on THIS, not prose)
 
-    def set_phase(self, phase: str | None) -> None:
-        """Tag subsequently-written records with a narrative phase (for the viewer's segmentation)."""
+    def set_phase(self, phase: str | None, key: str | None = None) -> None:
+        """Tag subsequently-written records with a phase. `phase` is the human label shown in the
+        viewer; `key` is a stable machine identifier that consumers (the viewer, the swap demo's
+        harm count) join on, so rewording the label can never silently break the segmentation."""
         self.phase = phase
+        self.phase_key = key
 
     def _next_seq(self) -> int:
         # Derive from the max existing seq prefix (not the count) so a gap or stray file can't
@@ -83,6 +87,8 @@ class Trail:
         }
         if self.phase is not None:
             record["phase"] = self.phase
+        if self.phase_key is not None:
+            record["phase_key"] = self.phase_key
         # NOJA records carry the accountability chain; black-box records deliberately do not.
         if accountable_role is not None:
             record["accountable_role"] = accountable_role
@@ -114,3 +120,24 @@ class Trail:
 def read_trail(trail_dir: str | Path) -> list[dict]:
     """Read all canonical JSON records from a trail directory, in sequence order."""
     return [json.loads(p.read_text()) for p in sorted(Path(trail_dir).glob("*.json"))]
+
+
+def is_payment(record: dict) -> bool:
+    """The ONE definition of a money-movement event (§2.1): a payment_authorized output. Every
+    counter and the verifier share this so they can never drift on what counts as a payment."""
+    return (record.get("output") or {}).get("action") == "payment_authorized"
+
+
+def clear_trail(trail_dir: str | Path, pipeline: str | None = None) -> int:
+    """Delete trail records (optionally only one pipeline's), returning how many were removed.
+    Owns the `*.json` filename contract so callers don't re-encode it. Reads each file only when a
+    pipeline filter is given."""
+    d = Path(trail_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    removed = 0
+    for p in d.glob("*.json"):
+        if pipeline is not None and json.loads(p.read_text()).get("pipeline") != pipeline:
+            continue
+        p.unlink()
+        removed += 1
+    return removed

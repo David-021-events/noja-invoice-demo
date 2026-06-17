@@ -17,23 +17,14 @@ Run from the repo root:  python -m runs.blackbox
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from domain import agent, approval_policy, fixtures
-from engine.trail import Trail, read_trail
+from engine.trail import Trail, clear_trail, is_payment, read_trail
 from llm import client
 
 _ROOT = Path(__file__).resolve().parent.parent
 _TRAIL = _ROOT / "trail"
-
-
-def _clear_blackbox_records() -> None:
-    """Remove only the black-box records from the shared trail, leaving NOJA records intact."""
-    _TRAIL.mkdir(parents=True, exist_ok=True)
-    for p in _TRAIL.glob("*.json"):
-        if json.loads(p.read_text()).get("pipeline") == "blackbox":
-            p.unlink()
 
 
 def _write_decision(trail: Trail, invoice: dict, decision: str, rationale: str) -> None:
@@ -84,7 +75,7 @@ def run_blackbox(trail: Trail, pos: list[dict], invoices: list[dict], model: str
 
 def main() -> None:
     client.require_api_key()
-    _clear_blackbox_records()
+    clear_trail(_TRAIL, pipeline="blackbox")  # remove only black-box records; keep NOJA intact
     pos = fixtures.purchase_orders()
     invoices = fixtures.invoices()
     model = client.current_model()
@@ -99,7 +90,7 @@ def main() -> None:
         print(f"[{mark}] {inv['invoice_id']}: {got:<9} (expected {exp})")
 
     bb = [r for r in read_trail(_TRAIL) if r.get("pipeline") == "blackbox"]
-    payments = sum(1 for r in bb if r.get("output", {}).get("action") == "payment_authorized")
+    payments = sum(1 for r in bb if is_payment(r))
     signed = sum(1 for r in bb if "signed_artifact_ref" in r)
     matched = sum(1 for inv in invoices if outcomes[inv["invoice_id"]] == inv["_expected"])
     print("=" * 60)

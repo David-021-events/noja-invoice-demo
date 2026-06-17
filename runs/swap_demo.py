@@ -27,9 +27,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from domain import agent, approval_policy, fixtures
-from engine.signature import Scope
-from engine.trail import Trail, read_trail
+from domain import fixtures
+from engine.trail import Trail, clear_trail, is_payment, read_trail
 from evals.suite import run_suite
 from llm import client
 from runs import blackbox as bb_run
@@ -38,15 +37,11 @@ from runs import noja as noja_run
 _ROOT = Path(__file__).resolve().parent.parent
 _TRAIL = _ROOT / "trail"
 
-PHASE_A = "A: model A — authorized"
-PHASE_B = "B: model B — green but unsigned"
-PHASE_C = "C: model B — re-authorized"
-
-
-def _clear_trail() -> None:
-    _TRAIL.mkdir(parents=True, exist_ok=True)
-    for p in _TRAIL.glob("*.json"):
-        p.unlink()
+# Each phase carries a human label (shown) and a stable machine key (joined on). The harm-window
+# key is the load-bearing one: consumers must never have to grep the prose to find it.
+PHASE_A, KEY_A = "A: model A — authorized", "phase-a"
+PHASE_B, KEY_WINDOW = "B: model B — green but unsigned", "harm-window"
+PHASE_C, KEY_C = "C: model B — re-authorized", "phase-c"
 
 
 def _surface_eval(trail: Trail, report: dict) -> None:
@@ -60,16 +55,16 @@ def _surface_eval(trail: Trail, report: dict) -> None:
         )
 
 
-def _payments(records: list[dict], pipeline: str, phase: str) -> int:
+def _payments(records: list[dict], pipeline: str, phase_key: str) -> int:
     return sum(1 for r in records
-               if r.get("pipeline") == pipeline and r.get("phase") == phase
-               and r.get("output", {}).get("action") == "payment_authorized")
+               if r.get("pipeline") == pipeline and r.get("phase_key") == phase_key
+               and is_payment(r))
 
 
 def main() -> None:
     noja_run.sign.ensure_signing_key()
     client.require_api_key()
-    _clear_trail()
+    clear_trail(_TRAIL)
     pos = fixtures.purchase_orders()
     invoices = fixtures.invoices()
     trail = Trail(_TRAIL)
@@ -80,7 +75,7 @@ def main() -> None:
 
     # ── Phase A: model A, authorized ─────────────────────────────────────────
     client.set_model(client.MODEL_A)
-    trail.set_phase(PHASE_A)
+    trail.set_phase(PHASE_A, key=KEY_A)
     report_a = run_suite(client.MODEL_A)
     _surface_eval(trail, report_a)
     print(f"[A] eval under {bare_a}: {'GREEN' if report_a['green'] else 'RED'} "
@@ -95,7 +90,7 @@ def main() -> None:
     print(f"\n>>> MODEL SWAP: {bare_a}  ->  {bare_b}\n")
 
     # ── Phase B: model B, green but UNSIGNED ─────────────────────────────────
-    trail.set_phase(PHASE_B)
+    trail.set_phase(PHASE_B, key=KEY_WINDOW)
     report_b = run_suite(client.MODEL_B)
     _surface_eval(trail, report_b)
     print(f"[B] eval under {bare_b}: {'GREEN' if report_b['green'] else 'RED'} "
@@ -111,24 +106,19 @@ def main() -> None:
     noja_run.run_invoices(trail, pos, invoices, sigs, client.MODEL_B)
 
     # ── Phase C: re-authorization (the only live human signature in the swap) ──
-    trail.set_phase(PHASE_C)
-    system_prompt = agent.noja_system_prompt(approval_policy.POLICY)
-    sigs.composite = noja_run._onboard(
-        trail=trail, node="agent_composite", artifact_id="composite-modelB",
-        content=agent.composite_artifact_bytes(approval_policy.POLICY, system_prompt, bare_b),
-        role="AI Controls Lead", sig_id="sig-composite-B",
-        scope=Scope(domain="invoice-approval/execution", temporal="demo-run",
-                    environmental={"lockfile": "requirements.txt"},
-                    behavior_envelope={"model_id": bare_b}),
-    )
+    trail.set_phase(PHASE_C, key=KEY_C)
+    # Reuse the single composite-onboarding definition so the re-authorized signature can't drift
+    # from the original scope/artifact contract.
+    sigs.composite = noja_run.onboard_composite(
+        trail, client.MODEL_B, sig_id="sig-composite-B", artifact_id="composite-modelB")
     print(f"[C] AI Controls Lead SIGNED a new composite authorizing {bare_b} (live human signature)")
     noja_run.run_invoices(trail, pos, invoices, sigs, client.MODEL_B)
 
     # ── The punchline, in numbers ────────────────────────────────────────────
     records = read_trail(_TRAIL)
-    bb_window = _payments(records, "blackbox", PHASE_B)
-    noja_window = _payments(records, "noja", PHASE_B)
-    noja_resumed = _payments(records, "noja", PHASE_C)
+    bb_window = _payments(records, "blackbox", KEY_WINDOW)
+    noja_window = _payments(records, "noja", KEY_WINDOW)
+    noja_resumed = _payments(records, "noja", KEY_C)
     print("=" * 64)
     print(f"GREEN-BUT-UNSIGNED WINDOW (model {bare_b}, eval green, not yet authorized):")
     print(f"  black-box payment_authorized events: {bb_window}  <- HARM: paid while unauthorized")

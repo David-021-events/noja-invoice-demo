@@ -61,6 +61,12 @@ class Scope:
             "volume": self.volume,
         }
 
+    def pinned_conditions(self) -> dict:
+        """Every §4.3 'condition' fact a lapse is checked against: both sub-axes, not just one.
+        Environmental (world facts, e.g. the lockfile hash) and behavior-envelope (own-behavior
+        facts, e.g. the model id) are both signed conditions, so both must be able to lapse."""
+        return {**self.environmental, **self.behavior_envelope}
+
 
 @dataclass
 class TransitionRecord:
@@ -102,6 +108,11 @@ class FallbackError(RuntimeError):
     """Raised when a requested fallback was not in the pre-signed set (§4.2)."""
 
 
+class ScopeError(RuntimeError):
+    """Raised when a signature's scope can't support the lapse machinery (§4.3) — e.g. a
+    lapse check on a signature that pins no conditions, which could only ever fail open."""
+
+
 @dataclass
 class Signature:
     """A signature over a signed artifact, with scope, a pre-signed fallback set, and state.
@@ -130,14 +141,20 @@ class Signature:
         self.state = State.ACTIVE
 
     def detect_lapse(self, observed: dict) -> bool:
-        """True iff any pinned behavior-envelope condition no longer matches the observed world.
+        """True iff any pinned scope condition no longer matches the observed world.
 
-        `observed` is a flat dict of the same keys the behavior envelope pins (e.g. {"model_id": ...}).
-        This is the §4.3 lapse condition; the demo turns it on via model_id (SRD §4.2)."""
-        for key, pinned in self.scope.behavior_envelope.items():
-            if observed.get(key) != pinned:
-                return True
-        return False
+        `observed` is a flat dict of the same keys the scope pins across BOTH condition sub-axes
+        (e.g. {"model_id": ..., "lockfile_sha256": ...}). This is the §4.3 lapse condition.
+
+        Fails loud if the signature pins no conditions at all: silently returning False there would
+        be a fail-open (a signature that can never lapse), which is the bug this guard prevents."""
+        pinned = self.scope.pinned_conditions()
+        if not pinned:
+            raise ScopeError(
+                f"detect_lapse on signature {self.signature_id!r} which pins no scope conditions; "
+                "it could never lapse (fail-open). Pin a condition, or do not gate it on lapse."
+            )
+        return any(observed.get(key) != value for key, value in pinned.items())
 
     def _select_fallback(self) -> Fallback:
         """Select a fallback from the *pre-signed set* (§4.2/§4.5). Demo prefers Safe-mode."""
@@ -150,7 +167,7 @@ class Signature:
         observed: dict,
         transition_id: str,
         timestamp: str,
-        trigger: str = "model_version_changed",
+        trigger: str | None = None,
         attestor: str = "engine-detector",
     ) -> TransitionRecord:
         """Generate the Active → Lapsed transition from the pre-signed scope + fallback (§4.5).
@@ -158,14 +175,24 @@ class Signature:
         The engine detects and records; it does not pretend a human signs now. The returned
         record must then be written to the trail and signed with the engine/detector key by the
         caller (sign.sign_transition). Sets state to Lapsed.
+
+        `trigger` is derived from which pinned condition(s) actually diverged, so the signed
+        transition states the real cause (not a domain-specific guess). This module is
+        domain-agnostic: it names the diverged keys, never what they mean.
         """
         if self.state is not State.ACTIVE:
             raise RuntimeError(f"Only an Active signature can lapse; state is {self.state.value}.")
 
+        pinned = self.scope.pinned_conditions()
+        diverged = sorted(k for k, v in pinned.items() if observed.get(k) != v)
+        if trigger is None:
+            trigger = ("scope_condition_changed:" + ",".join(diverged)) if diverged \
+                else "scope_condition_changed"
+
         fallback = self._select_fallback()
-        # Record only the pinned conditions that actually broke, against what was observed.
-        previous = dict(self.scope.behavior_envelope)
-        observed_subset = {k: observed.get(k) for k in self.scope.behavior_envelope}
+        # Record the pinned conditions and what was observed for each, so the lapse is auditable.
+        previous = dict(pinned)
+        observed_subset = {k: observed.get(k) for k in pinned}
 
         self.state = State.LAPSED
         return TransitionRecord(

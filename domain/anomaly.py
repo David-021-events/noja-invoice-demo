@@ -39,8 +39,12 @@ def predict(inp: dict) -> dict:
     """inp = {'invoice': ..., 'seen': [{'vendor','total'}, ...]} (seen = prior invoices this run)."""
     inv = inp["invoice"]
     seen = inp.get("seen", [])
+    # .get (not []) so a caller's seen-entry shape can't KeyError mid-run; money compared with a
+    # half-cent tolerance rather than exact float equality (880.0 vs 880.00 from differing sources).
     duplicate = any(
-        s["vendor"] == inv["vendor"] and s["total"] == inv["total_amount"] for s in seen
+        s.get("vendor") == inv["vendor"]
+        and abs((s.get("total") or 0.0) - inv["total_amount"]) < 0.005
+        for s in seen
     )
     misc_lines = [
         li["description"]

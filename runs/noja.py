@@ -13,6 +13,7 @@ Then prove traceability with:  python verify.py
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from dataclasses import dataclass
@@ -23,20 +24,28 @@ from domain import agent, anomaly, approval_policy, escalation, fixtures
 from engine import sign
 from engine.node import JudgmentNode
 from engine.signature import Fallback, Scope, Signature, State, TransitionRecord
-from engine.trail import Trail
+from engine.trail import Trail, clear_trail, is_payment
 from llm import client
 
 _ROOT = Path(__file__).resolve().parent.parent
 _ARTIFACTS = _ROOT / "artifacts"
 _TRAIL = _ROOT / "trail"
+_LOCKFILE = _ROOT / "requirements.txt"
 
 _FALLBACK_SET = (Fallback.SAFE_MODE, Fallback.HALT)
 
 
-def _clear_trail() -> None:
-    _TRAIL.mkdir(parents=True, exist_ok=True)
-    for p in _TRAIL.glob("*.json"):
-        p.unlink()
+def _environmental_scope() -> dict:
+    """The signed environmental scope condition (§4.3/§5.1): the dependency lockfile's content hash.
+    Pinning the HASH (not just the filename) makes the condition genuinely enforceable — a changed
+    lockfile lapses the composite, exactly as a model swap does. Computed fresh each run, identical
+    at onboarding and at lapse-detection, so it never false-lapses within a run."""
+    return {"lockfile_sha256": hashlib.sha256(_LOCKFILE.read_bytes()).hexdigest()}
+
+
+def _observed_world(model: str) -> dict:
+    """The observed values for every pinned composite condition (model + environment)."""
+    return {"model_id": client.bare_id(model), **_environmental_scope()}
 
 
 def _write_artifact(node: str, artifact_id: str, content: str) -> Path:
@@ -72,9 +81,31 @@ class Signatures:
     composite: Signature
 
 
-def onboard_all(trail: Trail, model: str) -> Signatures:
-    """Sign nodes 1-3 into Active. Node 3's composite is scoped to the pinned model id (the lapse axis)."""
+def onboard_composite(
+    trail: Trail, model: str, *, role: str = "AI Controls Lead", sig_id: str = "sig-composite",
+    artifact_id: str = "composite",
+) -> Signature:
+    """Sign node 3's execution composite into Active, scoped to the pinned model id AND the pinned
+    environment (the lapse axes). The ONE definition of the composite's artifact + scope, reused for
+    both initial onboarding and post-swap re-authorization so the two can never drift."""
     bare_model = client.bare_id(model)
+    system_prompt = agent.noja_system_prompt(approval_policy.POLICY)
+    environmental = _environmental_scope()
+    return _onboard(
+        trail=trail, node="agent_composite", artifact_id=artifact_id,
+        content=agent.composite_artifact_bytes(
+            approval_policy.POLICY, system_prompt, bare_model, environmental),
+        role=role, sig_id=sig_id,
+        scope=Scope(
+            domain="invoice-approval/execution", temporal="demo-run",
+            environmental=environmental,                  # §4.3 condition: lockfile hash
+            behavior_envelope={"model_id": bare_model},   # §4.3 condition the swap breaks
+        ),
+    )
+
+
+def onboard_all(trail: Trail, model: str) -> Signatures:
+    """Sign nodes 1-3 into Active. Node 3's composite is scoped to the pinned model id + environment."""
     sig1 = _onboard(
         trail=trail, node=anomaly.NODE, artifact_id=anomaly.ARTIFACT_ID,
         content=anomaly.artifact_bytes(), role=anomaly.ROLE, sig_id="sig-anomaly",
@@ -85,21 +116,9 @@ def onboard_all(trail: Trail, model: str) -> Signatures:
         content=approval_policy.artifact_bytes(), role=approval_policy.ROLE, sig_id="sig-approval",
         scope=Scope(domain="invoice-approval/approval-policy", temporal="demo-run"),
     )
-    system_prompt = agent.noja_system_prompt(approval_policy.POLICY)
-    sig3 = _onboard(
-        trail=trail, node="agent_composite", artifact_id="composite",
-        content=agent.composite_artifact_bytes(approval_policy.POLICY, system_prompt, bare_model),
-        role="AI Controls Lead", sig_id="sig-composite",
-        scope=Scope(
-            domain="invoice-approval/execution", temporal="demo-run",
-            environmental={"lockfile": "requirements.txt"},
-            behavior_envelope={"model_id": bare_model},  # the §4.3 condition the swap breaks
-        ),
-    )
-    # The composite MUST pin a model id or detect_lapse would fail open (never lapse). Guard it
-    # here so a future refactor that drops the pin fails loudly at onboarding, not silently at swap.
-    if "model_id" not in sig3.scope.behavior_envelope:
-        raise AssertionError("node-3 composite signature must pin a model_id in its behavior envelope")
+    # detect_lapse now fails loud on a condition-less composite, so the old model_id-pin assertion
+    # is no longer needed: onboard_composite always pins the lapse axes in one place.
+    sig3 = onboard_composite(trail, model)
     return Signatures(anomaly=sig1, approval=sig2, composite=sig3)
 
 
@@ -139,8 +158,11 @@ def _write_payment(trail: Trail, invoice: dict, upstream_ref: str, sig: Signatur
 def lapse_composite(trail: Trail, sig: Signature, observed_model_id: str) -> TransitionRecord | None:
     """Engine-detected Active->Lapsed transition (§4.5). Returns the transition, or None if scope
     still holds. The transition is drawn from the PRE-SIGNED scope+fallback and attested by the
-    engine/detector key — no human signs at lapse time. Records and signs the transition."""
-    observed = {"model_id": observed_model_id}
+    engine/detector key — no human signs at lapse time. Records and signs the transition.
+
+    `observed_model_id` is the bare id of the now-pinned model; the environmental conditions are
+    observed from the live world so any pinned axis (model OR lockfile) can drive the lapse."""
+    observed = {"model_id": observed_model_id, **_environmental_scope()}
     if not sig.detect_lapse(observed):
         return None
     ts = datetime.now(timezone.utc).isoformat()
@@ -183,7 +205,11 @@ def run_invoices(trail: Trail, pos: list[dict], invoices: list[dict], sigs: Sign
     outcomes: dict[str, str] = {}
 
     for inv in invoices:
-        r1 = n1.run(invoice_id=inv["invoice_id"], prediction_input={"invoice": inv, "seen": seen})
+        # Strip fixture-only labels (_expected/_case) ONCE at the boundary: the raw answer key must
+        # never enter the node graph, so no node's recorded output (or the manifest/viewer) can leak
+        # it. Every node downstream forwards the invoice it is given.
+        public = agent.public_invoice(inv)
+        r1 = n1.run(invoice_id=inv["invoice_id"], prediction_input={"invoice": public, "seen": seen})
         r2 = n2.run(invoice_id=inv["invoice_id"], prediction_input=r1.output, upstream_ref=r1.event_id)
         r3 = n3.run(invoice_id=inv["invoice_id"], prediction_input=r2.output, upstream_ref=r2.event_id)
 
@@ -193,9 +219,9 @@ def run_invoices(trail: Trail, pos: list[dict], invoices: list[dict], sigs: Sign
         # pre-signed safe-mode fallback (which returns HOLD), so a PAY decision can only arise
         # under an Active composite. The no-pay-on-lapse rule lives in the node, not here.
         if decision == "PAY":
-            _write_payment(trail, inv, upstream_ref=r3.event_id, sig=sigs.composite)
+            _write_payment(trail, public, upstream_ref=r3.event_id, sig=sigs.composite)
         elif decision == "ESCALATE":
-            _run_hitl(trail, inv, upstream_ref=r3.event_id)
+            _run_hitl(trail, public, upstream_ref=r3.event_id)
 
         seen.append({"vendor": inv["vendor"], "total": inv["total_amount"]})
 
@@ -205,7 +231,7 @@ def run_invoices(trail: Trail, pos: list[dict], invoices: list[dict], sigs: Sign
 def main() -> None:
     sign.ensure_signing_key()      # fail loud if signing is unavailable (§4.4)
     client.require_api_key()       # fail loud before any work if the model key is missing
-    _clear_trail()
+    clear_trail(_TRAIL)
     pos = fixtures.purchase_orders()
     invoices = fixtures.invoices()
     model = client.current_model()
@@ -223,7 +249,7 @@ def main() -> None:
         print(f"[{mark}] {inv['invoice_id']}: {got:<9} (expected {exp})")
 
     records = trail.records()
-    payments = sum(1 for r in records if r.get("output", {}).get("action") == "payment_authorized")
+    payments = sum(1 for r in records if is_payment(r))
     matched = sum(1 for inv in invoices if outcomes[inv["invoice_id"]] == inv["_expected"])
     print("=" * 60)
     print(f"NOJA run complete: {matched}/{len(invoices)} expected; "

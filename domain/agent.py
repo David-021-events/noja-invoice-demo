@@ -68,10 +68,13 @@ def noja_system_prompt(policy: PolicyParams) -> str:
     )
 
 
-def composite_artifact_bytes(policy: PolicyParams, system_prompt: str, model_id: str) -> str:
+def composite_artifact_bytes(
+    policy: PolicyParams, system_prompt: str, model_id: str, environmental: dict
+) -> str:
     """Node-3 composite artifact (NOJA §4.5): the bytes the AI Controls Lead signs. Bundles the
-    policy text, system prompt, tool definitions, the version-pinned model id, and the behavior
-    envelope. Re-pinning to a new model is a re-signing event — this is what lapses on the swap."""
+    policy text, system prompt, tool definitions, the version-pinned model id, the behavior
+    envelope, and the pinned environmental conditions (e.g. the lockfile hash). Re-pinning the
+    model OR the environment is a re-signing event — both are what can lapse on the swap."""
     return json.dumps(
         {
             "artifact": "agent-execution-composite",
@@ -84,7 +87,8 @@ def composite_artifact_bytes(policy: PolicyParams, system_prompt: str, model_id:
             "tool_definitions": [
                 {"name": "lookup_po", "signature": "lookup_po(po_number: str) -> dict"}
             ],
-            "model_id": model_id,  # version-pinned execution identity (the lapse axis)
+            "model_id": model_id,  # version-pinned execution identity (a lapse axis)
+            "environmental": environmental,  # pinned world facts (lockfile hash) — also a lapse axis
             "behavior_envelope": {
                 # Matches the eval suite's documented coverage categories (SRD §7.1) exactly — do
                 # not claim coverage the suite does not exercise.
@@ -92,7 +96,6 @@ def composite_artifact_bytes(policy: PolicyParams, system_prompt: str, model_id:
                     "clean match", "near match", "mismatch", "no PO", "duplicate",
                     "high-value escalation",
                 ],
-                "lockfile": "requirements.txt",  # environmental scope condition (§4.3/§5.1)
                 "note": "eval suite green under this pinned model id",
             },
         },
@@ -126,7 +129,9 @@ def make_execution_fns(*, pos: list[dict], policy: PolicyParams, system_prompt: 
             model=model, anomaly=inp.get("anomaly"), policy_eval=inp.get("policy_eval"),
         )
         return {
-            "invoice": inp["invoice"],
+            # Record the SANITIZED invoice only: the raw fixture carries _expected/_case, which must
+            # never reach the audit trail/manifest/viewer any more than it reaches the model prompt.
+            "invoice": public_invoice(inp["invoice"]),
             "decision": agent_decision.decision,
             "rationale": agent_decision.rationale,
             "cached": cached,
@@ -154,7 +159,7 @@ def safe_mode_execution(_prediction: dict, inp: dict) -> dict:
     """Pre-signed safe-mode behavior when the node-3 composite has lapsed (§4.3). Hold for review;
     crucially, no PAY (no money movement) until a human re-authorizes."""
     return {
-        "invoice": inp["invoice"],
+        "invoice": public_invoice(inp["invoice"]),  # never leak _expected/_case into the trail
         "decision": "HOLD",
         "rationale": "safe-mode: composite signature lapsed (model version unauthorized); "
                      "holding for human re-authorization.",
@@ -180,7 +185,7 @@ def blackbox_system_prompt(policy: PolicyParams) -> str:
     )
 
 
-def _public_invoice(invoice: dict) -> dict:
+def public_invoice(invoice: dict) -> dict:
     """Drop fixture-only metadata (keys starting with '_', e.g. _case/_expected) so the model is
     NEVER shown the expected outcome. Sending _expected would leak the answer and invalidate both
     the eval and the pipeline decisions."""
@@ -223,16 +228,16 @@ def decide(
     """
     model_id = client.bare_id(model)
     signals = extra_signals or {}
-    public_invoice = _public_invoice(invoice)  # never expose _case/_expected to the model
+    public_inv = public_invoice(invoice)  # never expose _case/_expected to the model
 
     # The cache key must capture everything that determines the answer (and nothing the model
     # never sees — so it excludes fixture metadata too).
     cache_payload = json.dumps(
-        {"system": system_prompt, "invoice": public_invoice, "pos": pos, "signals": signals},
+        {"system": system_prompt, "invoice": public_inv, "pos": pos, "signals": signals},
         sort_keys=True,
     )
 
-    user_message = "Decide this invoice:\n" + json.dumps(public_invoice, indent=2)
+    user_message = "Decide this invoice:\n" + json.dumps(public_inv, indent=2)
     if signals:
         user_message += f"\n\n{signals_label}:\n" + json.dumps(signals, indent=2)
 

@@ -30,7 +30,11 @@ def _load_dotenv() -> None:
             val = val[1:-1]
         elif " #" in val:
             val = val.split(" #", 1)[0].strip()
-        os.environ.setdefault(key.strip(), val)
+        # Only fill from .env when the env has no usable (non-empty) value. setdefault would let an
+        # empty exported var (common in Codespaces/CI: `export ANTHROPIC_API_KEY=`) shadow a good
+        # .env value; a real non-empty env value still wins.
+        if not os.environ.get(key.strip()):
+            os.environ[key.strip()] = val
 
 
 _load_dotenv()
