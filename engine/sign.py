@@ -22,6 +22,7 @@ entire point of the demonstration.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,10 +77,14 @@ class SignedRef:
         return {"tag": self.tag, "content_hash": self.content_hash}
 
 
-def _git(*args: str, cwd: str | Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
+def _git(
+    *args: str, cwd: str | Path | None = None, check: bool = True, stdin: str = "",
+) -> subprocess.CompletedProcess:
+    # Always supply stdin (default empty) so git never blocks reading an inherited TTY.
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd) if cwd else None,
+        input=stdin,
         capture_output=True,
         text=True,
         check=check,
@@ -92,20 +97,30 @@ def _signingkey_configured(cwd: str | Path | None = None) -> str | None:
     return key or None
 
 
+# Processes that pass the end-to-end self-test once need not repeat it per artifact (it is a
+# startup gate, not a hot-path check). Keyed by working dir.
+_selftest_passed: set[str] = set()
+
+
 def ensure_signing_key(cwd: str | Path | None = None) -> None:
     """Verify a usable signing key exists, by actually signing and verifying a throwaway tag.
 
     Raises SigningKeyError with setup instructions if signing is not configured or does not
     work. This is the §4.4 fail-loud gate: call it at startup before doing any real work.
     A config-only check is not enough — environments like Codespaces preset a gpg.program that
-    silently overrides the key, so we prove signing end-to-end.
+    silently overrides the key, so we prove signing end-to-end. The end-to-end probe runs once
+    per process per working dir; later calls just confirm a key is still configured.
     """
     if _signingkey_configured(cwd) is None:
         raise SigningKeyError(_SETUP_INSTRUCTIONS)
 
+    key = str(cwd) if cwd else "."
+    if key in _selftest_passed:
+        return
+
     probe = "noja/_signing_selftest"
-    # Sign the empty blob (a stable, always-present object) and verify it.
-    empty_blob = _git("hash-object", "-w", "--stdin", cwd=cwd, check=True)
+    # Sign the empty blob (write it via stdin) and verify it.
+    empty_blob = _git("hash-object", "-w", "--stdin", cwd=cwd, check=True, stdin="")
     blob_sha = empty_blob.stdout.strip()  # git's well-known empty-blob hash
 
     _git("tag", "-d", probe, cwd=cwd, check=False)  # clear any stale probe
@@ -126,6 +141,8 @@ def ensure_signing_key(cwd: str | Path | None = None) -> None:
     finally:
         _git("tag", "-d", probe, cwd=cwd, check=False)
 
+    _selftest_passed.add(key)
+
 
 def hash_object(path: str | Path, cwd: str | Path | None = None) -> str:
     """Write the file's bytes into the Git object store and return the content hash (blob sha)."""
@@ -133,25 +150,33 @@ def hash_object(path: str | Path, cwd: str | Path | None = None) -> str:
     return proc.stdout.strip()
 
 
-def _sign_blob(tag: str, path: str | Path, message: str, cwd: str | Path | None = None) -> SignedRef:
+def _create_signed_tag(
+    tag: str, target_sha: str, message: str, cwd: str | Path | None = None
+) -> SignedRef:
+    """Create a signed tag pointing at an already-hashed blob. Caller passes the content hash so
+    the tag name and the SignedRef.content_hash are always derived from the same single hash."""
     ensure_signing_key(cwd)
-    content_hash = hash_object(path, cwd=cwd)
     _git("tag", "-d", tag, cwd=cwd, check=False)  # idempotent re-sign during a demo run
-    signed = _git("tag", "-s", tag, content_hash, "-m", message, cwd=cwd, check=False)
+    signed = _git("tag", "-s", tag, target_sha, "-m", message, cwd=cwd, check=False)
     if signed.returncode != 0:
         raise SigningKeyError(
-            f"Failed to sign artifact tag {tag!r}.\n\n{signed.stderr.strip()}\n\n{_SETUP_INSTRUCTIONS}"
+            f"Failed to sign tag {tag!r}.\n\n{signed.stderr.strip()}\n\n{_SETUP_INSTRUCTIONS}"
         )
-    return SignedRef(tag=tag, content_hash=content_hash)
+    return SignedRef(tag=tag, content_hash=target_sha)
+
+
+def _sanitize_ref_component(text: str) -> str:
+    """Make a string safe to embed in a Git ref name (refs forbid ':', '~', '^', '..', etc.)."""
+    return re.sub(r"[^0-9A-Za-z._-]", "-", text).replace("..", "-").strip(".-") or "x"
 
 
 def sign_artifact(
     path: str | Path, node: str, artifact_id: str, message: str, cwd: str | Path | None = None
 ) -> SignedRef:
     """Sign a NOJA artifact's bytes. Tag: artifact/<node>/<artifact_id>/<short_hash> (§4.4)."""
-    content_hash = hash_object(path, cwd=cwd)
+    content_hash = hash_object(path, cwd=cwd)  # single hash, reused for tag name + ref
     tag = f"artifact/{node}/{artifact_id}/{content_hash[:12]}"
-    return _sign_blob(tag, path, message, cwd=cwd)
+    return _create_signed_tag(tag, content_hash, message, cwd=cwd)
 
 
 def sign_transition(
@@ -164,14 +189,25 @@ def sign_transition(
     that the engine observed a pre-signed condition fire — not that a human authorized it now
     (§4.5). The human authority was pre-signed in the prior Active composite.
     """
-    safe_ts = timestamp.replace(":", "-")
-    tag = f"transition/{signature_id}/{to_state}/{safe_ts}"
-    return _sign_blob(tag, path, message, cwd=cwd)
+    content_hash = hash_object(path, cwd=cwd)
+    safe_ts = _sanitize_ref_component(timestamp)
+    tag = f"transition/{_sanitize_ref_component(signature_id)}/{to_state}/{safe_ts}"
+    return _create_signed_tag(tag, content_hash, message, cwd=cwd)
 
 
 def verify(tag: str, cwd: str | Path | None = None) -> bool:
     """Run `git verify-tag`. Returns True iff the signature verifies."""
     return _git("verify-tag", tag, cwd=cwd, check=False).returncode == 0
+
+
+def tag_target_hash(tag: str, cwd: str | Path | None = None) -> str | None:
+    """The object hash a tag points at (the signed blob), or None if the tag is missing.
+
+    Used to bind a trail's claimed content_hash to what the signature actually covers, so a tampered
+    trail record cannot claim a different hash while still naming a valid tag."""
+    proc = _git("rev-parse", "--verify", "--quiet", f"{tag}^{{}}", cwd=cwd, check=False)
+    target = proc.stdout.strip()
+    return target or None
 
 
 def read_signed_bytes(content_hash: str, cwd: str | Path | None = None) -> bytes:

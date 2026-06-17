@@ -24,7 +24,13 @@ def _load_dotenv() -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, val = line.split("=", 1)
-        os.environ.setdefault(key.strip(), val.strip())
+        val = val.strip()
+        # Strip surrounding quotes; only strip a trailing inline comment on unquoted values.
+        if len(val) >= 2 and val[0] in "\"'" and val[-1] == val[0]:
+            val = val[1:-1]
+        elif " #" in val:
+            val = val.split(" #", 1)[0].strip()
+        os.environ.setdefault(key.strip(), val)
 
 
 _load_dotenv()
@@ -48,9 +54,17 @@ def set_model(model: str) -> None:
     _state["model"] = model
 
 
+def bare_id(model: str) -> str:
+    """Strip the provider prefix from a Pydantic AI model string ('anthropic:claude-x' -> 'claude-x').
+
+    This single definition is the contract used by the cache key AND the node-3 composite scope
+    condition, so the lapse axis and the cache stay in lockstep if the prefix convention changes."""
+    return model.split(":", 1)[-1]
+
+
 def model_id() -> str:
-    """The bare model id (no provider prefix) — used in composite scope and cache keys."""
-    return current_model().split(":", 1)[-1]
+    """The bare id of the currently pinned model — used in composite scope and cache keys."""
+    return bare_id(current_model())
 
 
 def require_api_key() -> None:

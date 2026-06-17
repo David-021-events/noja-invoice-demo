@@ -34,8 +34,14 @@ class Trail:
         self._seq = self._next_seq()
 
     def _next_seq(self) -> int:
-        existing = sorted(self.dir.glob("*.json"))
-        return len(existing)
+        # Derive from the max existing seq prefix (not the count) so a gap or stray file can't
+        # produce a colliding seq. Filenames are "{seq:04d}_{event_id}.json".
+        max_seq = -1
+        for p in self.dir.glob("*.json"):
+            head = p.name.split("_", 1)[0]
+            if head.isdigit():
+                max_seq = max(max_seq, int(head))
+        return max_seq + 1
 
     def write(
         self,
@@ -95,15 +101,9 @@ class Trail:
 
     def records(self) -> list[dict]:
         """Read every record back, in sequence order (canonical source for verify/manifest)."""
-        out = []
-        for p in sorted(self.dir.glob("*.json")):
-            out.append(json.loads(p.read_text()))
-        return out
+        return read_trail(self.dir)
 
 
 def read_trail(trail_dir: str | Path) -> list[dict]:
     """Read all canonical JSON records from a trail directory, in sequence order."""
-    out = []
-    for p in sorted(Path(trail_dir).glob("*.json")):
-        out.append(json.loads(p.read_text()))
-    return out
+    return [json.loads(p.read_text()) for p in sorted(Path(trail_dir).glob("*.json"))]

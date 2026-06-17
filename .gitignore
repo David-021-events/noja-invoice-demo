@@ -226,3 +226,5 @@ trail/
 viewer/trail_manifest.json
 # record/replay cache store (disposable)
 llm/_cache/
+# OUTPUT: signed artifact bytes (canonical store is the tagged git blob, regenerated per run)
+artifacts/

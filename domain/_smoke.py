@@ -7,23 +7,15 @@ First run makes real Claude calls (needs ANTHROPIC_API_KEY); subsequent runs rep
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
+from domain import fixtures
 from domain.agent import PolicyParams, decide, noja_system_prompt
 from llm import client
-
-_ROOT = Path(__file__).resolve().parent.parent
-
-
-def _load(name: str):
-    return json.loads((_ROOT / "fixtures" / name).read_text())
 
 
 def main() -> None:
     client.require_api_key()
-    invoices = {inv["invoice_id"]: inv for inv in _load("invoices.json")}
-    pos = _load("purchase_orders.json")
+    invoices = {inv["invoice_id"]: inv for inv in fixtures.invoices()}
+    pos = fixtures.purchase_orders()
     policy = PolicyParams()
     prompt = noja_system_prompt(policy)
     model = client.current_model()

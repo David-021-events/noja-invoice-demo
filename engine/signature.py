@@ -139,10 +139,10 @@ class Signature:
                 return True
         return False
 
-    def _select_fallback(self, preferred: Fallback = Fallback.SAFE_MODE) -> Fallback:
+    def _select_fallback(self) -> Fallback:
         """Select a fallback from the *pre-signed set* (§4.2/§4.5). Demo prefers Safe-mode."""
-        if preferred in self.fallback_set:
-            return preferred
+        if Fallback.SAFE_MODE in self.fallback_set:
+            return Fallback.SAFE_MODE
         return self.fallback_set[0]
 
     def lapse(
